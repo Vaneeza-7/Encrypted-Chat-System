@@ -108,6 +108,31 @@ string decryptAES(const vector<unsigned char>& ciphertext, const unsigned char* 
     return string(plaintext.begin(), plaintext.end());
 }
 
+vector<unsigned char> encryptAES(const string& plaintext, const unsigned char* key, const unsigned char* iv) {
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) handleErrors();
+
+    if (1 != EVP_EncryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, key, iv))
+        handleErrors();
+
+    vector<unsigned char> ciphertext(plaintext.size() + EVP_CIPHER_block_size(EVP_aes_128_cbc()));
+    int len;
+    int ciphertext_len;
+
+    if (1 != EVP_EncryptUpdate(ctx, ciphertext.data(), &len, reinterpret_cast<const unsigned char*>(plaintext.c_str()), plaintext.size()))
+        handleErrors();
+    ciphertext_len = len;
+
+    if (1 != EVP_EncryptFinal_ex(ctx, ciphertext.data() + len, &len))
+        handleErrors();
+    ciphertext_len += len;
+
+    ciphertext.resize(ciphertext_len);
+    EVP_CIPHER_CTX_free(ctx);
+
+    return ciphertext;
+}
+
 // Function to generate a random 8-byte (64-bit) salt
 string generateSalt() {
     unsigned char salt[8];  // 8 bytes for a 16-character hexadecimal salt
@@ -298,6 +323,7 @@ void loginProcess(int client_socket)
 	if (verifyLogin(uname, pwd, "creds.txt")) {
 		cout << "User logged in successfully." << endl;
 		ultimateUname=uname;
+		sendMsg2Client("Login successful!", client_socket);
 	    } else {
 		cout << "Username or password is incorrect." << endl;
 		sendMsg2Client("Username or password is incorrect.", client_socket);
@@ -354,6 +380,7 @@ void registrationProcess(int client_socket)
 	if (storeUser(email, uname, pwd, "creds.txt")) {
 		cout << "User stored successfully." << endl;
 		ultimateUname=uname;
+		sendMsg2Client("Registration successful!", client_socket);
 	    } else {
 		cout << "Failed to store user." << endl;
 		sendMsg2Client("Username already exists.", client_socket);	
@@ -361,9 +388,47 @@ void registrationProcess(int client_socket)
 	 }
 }
 
+void chatLoop(int client_socket){
+
+unsigned char iv[16] = {0x10, 0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01};
+string response;
+
+while (true){
+	int bufferSize = 256;
+	vector<unsigned char> encrypted_response(bufferSize);
+
+	// Clear buffer and receive response from client
+	int bytes_received = recv(client_socket, encrypted_response.data(), encrypted_response.size(), 0);
+	if (bytes_received > 0) {
+	    encrypted_response.resize(bytes_received);
+
+	    // Decrypt the response
+	    string decrypted_response = decryptAES(encrypted_response, aesKey, iv);
+	    cout << "Decrypted Response from Client: " << decrypted_response << endl;
+	} else {
+	    cerr << "Error: Failed to receive encrypted response from client." << endl;
+	}
+
+	//cout << "Client: " << buf << endl;
+
+	// Send a response back to the client
+	cout << "You (Server): ";
+	getline(cin, response);
+	// Encrypt the message and send to client
+	vector<unsigned char> encrypt_message = encryptAES(response, aesKey, iv);
+	send(client_socket, encrypt_message.data(), encrypt_message.size(), 0);
+	
+	if (response == "bye") {
+            cout << "You disconnected from the chat.\n";
+            break;
+        }
+   }
+}
+
 int main() {
     char buf[256];
     char message[256] = "Server: ";
+    unsigned char iv[16] = {0x10, 0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01};
     
     cout << "\n\t>>>>>>>>>> FAST NUCES University Chat Server <<<<<<<<<<\n\n";
     
@@ -389,6 +454,7 @@ int main() {
     bool flagsend = false;
     
     long long privKeyServer2 = rand()%10+1;
+    long long sharedKey2;
     long long pubKeyServer2 = generatePublicKey(privKeyServer2);
     bool flagrcv2 = false;
     bool flagsend2 = false;
@@ -418,6 +484,7 @@ int main() {
                 
                 long long sharedKey = computeSharedSecret(rcvdClientPubKey, privKeyServer);
                 cout <<"Shared Secret Key (Server) :" <<sharedKey<<endl;
+                sharedKey2 = sharedKey;
 		deriveAESKey(sharedKey, aesKey);
 		cout << "Derived 16-byte AES key (Server): ";
 		for (int i = 0; i < 16; ++i) {
@@ -451,16 +518,23 @@ int main() {
                 }
                 
                 if (strcmp(buf, "Login initiated...") == 0) {
-                    //cout << "Registration initiated..."<<endl;
                     memset(buf, 0, sizeof(buf));
                     loginProcess(client_socket);
                 }
                 
-                if(!ulimateUname.empty() && flagg==false)
+                if(!ultimateUname.empty() && flagg==false)
                 {
-                 cout <<"Shared new Secret Key (Server) :" <<ultimateUname + sharedKey2<<endl;
+                 cout <<"Shared new Secret Key (Server) :" <<ultimateUname<<sharedKey2<<endl;
                  flagg=true;
                 }
+                
+                if (strcmp(buf, "Start Chat") == 0) {
+                    cout<<"Start Chat"<<endl;
+                    memset(buf, 0, sizeof(buf));
+                    chatLoop(client_socket);
+                    break;
+                }
+                
 		///2nd key exchange
 		/*if(flagrcv2==false){
                 // clear buffer and receive public key from client
@@ -493,14 +567,9 @@ int main() {
                 // clear buffer and receive message from client
                 //memset(buf, 0, sizeof(buf));
                 //recv(client_socket, buf, sizeof(buf), 0);
-
-                cout << "Client: " << buf << endl;
-                // Send a response back to the client
-                cout << "You (Server): ";
-                string response;
-                getline(cin, response);
-                strcpy(message + 8, response.c_str()); // append the response after "Server: "
-                send(client_socket, message, sizeof(message), 0);
+                
+                //strcpy(message + 8, response.c_str()); // append the response after "Server: "
+                //send(client_socket, message, sizeof(message), 0);
             }
 
             // Close the client socket after communication

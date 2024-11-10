@@ -220,7 +220,7 @@ auto printEncrypted = [](const vector<unsigned char>& data) {
     EncryptedData edata;
     EncryptedData& data=edata;
     
-    if (email_encrypted.size() != 32 || uname_encrypted.size() != 16 || 
+    if (email_encrypted.size() != 16 && email_encrypted.size() !=32 || uname_encrypted.size() != 16 || 
         pwd_encrypted.size() != 16) {
         cout<<email_encrypted.size()<<endl;
         cout<<uname_encrypted.size()<<endl;
@@ -229,7 +229,7 @@ auto printEncrypted = [](const vector<unsigned char>& data) {
         std::cerr << "Error: Each encrypted field and IV must be exactly 16 bytes." << std::endl;
         return;
     }
-
+    
     memcpy(data.iv, iv, 16);
     memcpy(data.email, email_encrypted.data(), 32);
     memcpy(data.uname, uname_encrypted.data(), 16);
@@ -241,6 +241,63 @@ auto printEncrypted = [](const vector<unsigned char>& data) {
 
 }
 
+string decryptAES(const vector<unsigned char>& ciphertext, const unsigned char* key, const unsigned char* iv) {
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) handleErrors();
+
+    if (1 != EVP_DecryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, key, iv))
+        handleErrors();
+
+    vector<unsigned char> plaintext(ciphertext.size());
+    int len;
+    int plaintext_len;
+
+    if (1 != EVP_DecryptUpdate(ctx, plaintext.data(), &len, ciphertext.data(), ciphertext.size()))
+        handleErrors();
+    plaintext_len = len;
+
+    if (1 != EVP_DecryptFinal_ex(ctx, plaintext.data() + len, &len))
+        handleErrors();
+    plaintext_len += len;
+
+    plaintext.resize(plaintext_len);
+    EVP_CIPHER_CTX_free(ctx);
+
+    return string(plaintext.begin(), plaintext.end());
+}
+
+void chatLoop() {
+    string message;
+    unsigned char iv[16] = {0x10, 0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01};
+    cout<<"Im in chat loop"<<endl;
+    while (true) {
+        // Get user input and encrypt message
+        cout << "You (Client): ";
+        getline(cin, message);
+        
+        vector<unsigned char> encrypt_message = encryptAES(message, aesKey, iv);
+        send(sock, encrypt_message.data(), encrypt_message.size(), 0);
+
+        // Terminate chat if user types "bye"
+        if (message == "bye") {
+            cout << "You disconnected from the chat.\n";
+            break;
+        }
+        // Prepare to receive encrypted response from server
+        int bufferSize = 256;
+        vector<unsigned char> encrypted_response(bufferSize);
+        int bytes_received = recv(sock, encrypted_response.data(), encrypted_response.size(), 0);
+        if (bytes_received > 0) {
+            encrypted_response.resize(bytes_received);
+            string decrypted_response = decryptAES(encrypted_response, aesKey, iv);
+            cout << "Decrypted Response from Server: " << decrypted_response << endl;
+        } else {
+            cerr << "Error: Failed to receive encrypted response from server." << endl;
+            break;
+        }
+        
+    }
+}
 
 
 void menu() {
@@ -263,7 +320,8 @@ void menu() {
 		{
 		    cout << "Error: Username or password is incorrect. Please try again." << endl;
 		} 
-		else 
+		else if (strcmp(buf, "Login successful!") == 0) 
+		 
 		{
 		    cout << "Login successful!" << endl;
 		    loginSuccess = true;
@@ -286,11 +344,12 @@ void menu() {
 		{
 		    cout << "Error: Username already exists. Please try a different username." << endl;
 		} 
-		else 
+		else if (strcmp(buf, "Registration successful!") == 0)
 		{
 		    cout << "Registration successful!" << endl;
 		    registrationSuccess = true;
 		}
+		
 	    }
 	    break;
 	} 
@@ -298,8 +357,12 @@ void menu() {
             cout << "Invalid option. Please choose 1 or 2.\n";
         }
     }
+    
+    cout<<"Start Chat"<<endl;
+    sendMsg2Server("Start Chat");
+    chatLoop();
+    
 }
-
 
 int main() {
     char buf[256];
@@ -321,7 +384,7 @@ int main() {
     // Create socket and connect to the server
     create_socket();
 
-    while (true) {
+    //while (true) {
     
 	//send the key to server
 	if(flagsend==false){
@@ -351,7 +414,7 @@ int main() {
         //call menu function 1 time, then start chat
         menu();
         }
-        
+
         //////exhange new key for communication
         
         //send the key to server
@@ -384,27 +447,49 @@ int main() {
         flagrcv2 = true;
         }
       */
-        // Get user input and send it to the server
+/*        // Get user input and send it to the server
         cout << "You (Client): ";
         string message;
         getline(cin, message);
 
+	// Encrypt the message
+	vector<unsigned char> encrypt_message = encryptAES(message, aesKey, iv);
+
+	// Send the encrypted message to the server
+	send(sock, encrypt_message.data(), encrypt_message.size(), 0);
+        
         // Send the message to the server
-        memset(buf, 0, sizeof(buf));
-        strcpy(buf, message.c_str());
-        send(sock, buf, sizeof(buf), 0);
+        //memset(buf, 0, sizeof(buf));
+        //strcpy(buf, message.c_str());
+        //send(sock, buf, sizeof(buf), 0);
 
         // If the client sends "bye", terminate the chat
         if (message == "bye") {
             cout << "You disconnected from the chat.\n";
             break;
         }
+        
+	int bufferSize = 256;
+	vector<unsigned char> encrypted_response(bufferSize);
 
+	// Clear buffer and receive response from server
+	int bytes_received = recv(sock, encrypted_response.data(), encrypted_response.size(), 0);
+	if (bytes_received > 0) {
+	    encrypted_response.resize(bytes_received);
+
+	    // Decrypt the response
+	    string decrypted_response = decryptAES(encrypted_response, aesKey, iv);
+	    cout << "Decrypted Response from Server: " << decrypted_response << endl;
+	} else {
+	    cerr << "Error: Failed to receive encrypted response from server." << endl;
+	}
+	
         // Clear buffer and receive response from server
-        memset(buf, 0, sizeof(buf));
-        recv(sock, buf, sizeof(buf), 0);
-        cout << buf << endl;
-    }
+        //memset(buf, 0, sizeof(buf));
+        //recv(sock, buf, sizeof(buf), 0);
+        //cout << buf << endl;
+        */
+    //}
 
     // Close the socket after communication
     close(sock);
