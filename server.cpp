@@ -7,12 +7,42 @@
 #include <cstdlib>
 #include <cmath>
 #include <ctime>
+#include <vector>
+#include<fstream>
+#include <iomanip>
+#include <string>
+#include <sstream>
 #include <openssl/sha.h>
+#include <openssl/evp.h>
+#include <openssl/rand.h>
 
 using namespace std;
 
 const long long P = 23;
 const long long alpha = 5;
+unsigned char aesKey[16];
+
+struct EncryptedData {
+    unsigned char iv[16];
+    unsigned char email[32];
+    unsigned char uname[16];
+    unsigned char password[16];
+};
+
+struct EncryptedLoginData {
+    unsigned char iv[16];
+    unsigned char uname[16];
+    unsigned char password[16];
+};
+
+void sendMsg2Client(const string& message, int client_sock) {
+    char buf[256];
+    memset(buf, 0, sizeof(buf)); 
+    strcpy(buf, message.c_str());  
+    send(client_sock, buf, sizeof(buf), 0); 
+    memset(buf, 0, sizeof(buf)); 
+     
+}
 
 long long generatePublicKey(long long privateKey)
 {
@@ -24,6 +54,11 @@ long long computeSharedSecret(long long rcvdPublicKey, long long privateKey)
   return static_cast <long long>(pow(rcvdPublicKey, privateKey)) %  P;
 }
 
+void handleErrors() {
+    cerr << "Error occurred." << endl;
+    exit(1);
+}
+
 void deriveAESKey(long long sharedSecret, unsigned char* key, int key_length = 16) {
    
     string sharedSecretStr = to_string(sharedSecret);
@@ -32,6 +67,283 @@ void deriveAESKey(long long sharedSecret, unsigned char* key, int key_length = 1
     SHA256(reinterpret_cast<const unsigned char*>(sharedSecretStr.c_str()), sharedSecretStr.size(), hash);
 
     memcpy(key, hash, key_length);
+}
+
+string decryptAES(const vector<unsigned char>& ciphertext, const unsigned char* key, const unsigned char* iv) {
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) handleErrors();
+
+    if (1 != EVP_DecryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, key, iv))
+        handleErrors();
+
+    vector<unsigned char> plaintext(ciphertext.size());
+    int len;
+    int plaintext_len;
+
+    if (1 != EVP_DecryptUpdate(ctx, plaintext.data(), &len, ciphertext.data(), ciphertext.size()))
+        handleErrors();
+    plaintext_len = len;
+
+    if (1 != EVP_DecryptFinal_ex(ctx, plaintext.data() + len, &len))
+        handleErrors();
+    plaintext_len += len;
+
+    plaintext.resize(plaintext_len);
+    EVP_CIPHER_CTX_free(ctx);
+
+    return string(plaintext.begin(), plaintext.end());
+}
+
+// Function to generate a random 8-byte (64-bit) salt
+string generateSalt() {
+    unsigned char salt[8];  // 8 bytes for a 16-character hexadecimal salt
+    RAND_bytes(salt, sizeof(salt));
+    stringstream ss;
+    for (int i = 0; i < 8; ++i) {
+        ss << hex << setw(2) << setfill('0') << static_cast<int>(salt[i]);
+    }
+    return ss.str();
+}
+
+// Function to hash a password with a salt using SHA-256
+string hashPassword(const string& password, const string& salt) {
+    string saltedPassword = password + salt;
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256(reinterpret_cast<const unsigned char*>(saltedPassword.c_str()), saltedPassword.size(), hash);
+
+    stringstream ss;
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; ++i) {
+        ss << hex << setw(2) << setfill('0') << static_cast<int>(hash[i]);
+    }
+    return ss.str();
+}
+
+bool isUsernameTaken(const string& username, const string& filename) {
+    ifstream file(filename);
+    if (!file.is_open()) {
+        // File does not exist, meaning no users are registered yet
+        return false;
+    }
+    
+    
+    string line;
+
+    while (getline(file, line)) {
+        size_t pos = line.find("username: ");
+        if (pos != string::npos) {
+            size_t start = pos + 10;
+            size_t end = line.find(",", start);
+            string foundUsername = line.substr(start, end - start);
+
+            if (foundUsername == username) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+// Function to store user credentials
+bool storeUser(const string& email, const string& username, const string& password, const string& filename) {
+    // Check if the username already exists
+    if (isUsernameTaken(username, filename)) {
+        cout << "Username already exists." << endl;
+        return false;
+    }
+
+    // Generate salt and hash the password
+    string salt = generateSalt();
+    string hashedPassword = hashPassword(password, salt);
+
+    ofstream file(filename, ios::app);
+    if (!file) {
+        cerr << "Error opening file." << endl;
+        return false;
+    }
+
+    // Write the user's information
+    file << "email: " << email << ", username: " << username 
+         << ", password: " << hashedPassword << " salt: " << salt << endl;
+
+    cout << "User registered successfully." << endl;
+    return true;
+}
+
+bool retrievePasswordAndSalt(const string username, const string filename, string& hashedPassword, string& salt) {
+    ifstream file(filename);
+    if (!file.is_open()) {
+        cerr << "Error opening file." << endl;
+        return false;
+    }
+    
+    string line;
+    while (getline(file, line)) {
+        size_t pos = line.find("username: ");
+        if (pos != string::npos) {
+            size_t start = pos + 10;
+            size_t end = line.find(",", start);
+            string foundUsername = line.substr(start, end - start);
+
+            size_t passwordEnd;
+            if (foundUsername == username) {
+                // Extract hashed password
+                size_t passwordPos = line.find("password: ", end);
+                if (passwordPos != string::npos) {
+                    size_t passwordStart = passwordPos + 10;
+                    passwordEnd = line.find(" ", passwordStart);
+                    hashedPassword = line.substr(passwordStart, passwordEnd - passwordStart);
+                }
+                
+                // Extract salt
+                size_t saltPos = line.find("salt: ", passwordEnd);
+                if (saltPos != string::npos) {
+                    size_t saltStart = saltPos + 6;
+                    salt = line.substr(saltStart);
+                }
+
+                file.close();
+                return true;  // Successfully retrieved password and salt
+            }
+        }
+    }
+
+    file.close();
+    return false;  // Username not found
+}
+
+bool verifyLogin(string uname, string pwd, string filename)
+{
+ //Check if the username exists
+    if (isUsernameTaken(uname, filename)) {
+    
+    //retrieve password and salt for this username
+        string storedHashedPassword, storedSalt;
+        if (retrievePasswordAndSalt(uname, filename, storedHashedPassword, storedSalt)) {
+            // Hash the entered password with the retrieved salt and compare
+            string enteredHashedPassword = hashPassword(pwd, storedSalt);
+           
+            if (enteredHashedPassword == storedHashedPassword) {
+                cout << "Login successful." << endl;
+                return true;
+            } else {
+                cout << "Password incorrect." << endl;
+                return false;
+          }
+    	}
+	else
+	 {
+	   cout<<"error retrieving data"<<endl;
+	   return false; 
+	 }
+    }
+    else
+    {
+     cout<<"Username incorrect."<<endl;
+     return false;
+    }
+
+}
+
+void loginProcess(int client_socket)
+{
+
+    EncryptedLoginData data;
+    int bytes_received = recv(client_socket, reinterpret_cast<unsigned char*>(&data), sizeof(data), 0);
+
+    if (bytes_received <= 0) {
+        cerr << "Error: Failed to receive data or connection closed by client." << endl;
+    } else {
+
+        cout << "Received IV: ";
+        for (int i = 0; i < 16; ++i) {
+            cout << hex << static_cast<int>(data.iv[i]) << " ";
+        }
+        cout << dec << endl;
+
+        cout << "Received Encrypted Username: ";
+        for (int i = 0; i < 16; ++i) {
+            cout << hex << static_cast<int>(data.uname[i]) << " ";
+        }
+        cout << dec << endl;
+
+        cout << "Received Encrypted Password: ";
+        for (int i = 0; i < 16; ++i) {
+            cout << hex << static_cast<int>(data.password[i]) << " ";
+        }
+        cout << dec << endl;
+
+        // decrypting the fields
+        string uname, pwd;
+        uname = decryptAES(vector<unsigned char>(data.uname, data.uname + 16), aesKey, data.iv);
+        pwd = decryptAES(vector<unsigned char>(data.password, data.password + 16), aesKey, data.iv);
+	
+	cout << "Decrypted Username: " << uname << endl;
+	cout << "Decrypted Password: " << pwd << endl;
+
+	if (verifyLogin(uname, pwd, "creds.txt")) {
+		cout << "User logged in successfully." << endl;
+	    } else {
+		cout << "Username or password is incorrect." << endl;
+		sendMsg2Client("Username or password is incorrect.", client_socket);
+		
+	    }
+
+	 }
+}
+
+void registrationProcess(int client_socket)
+{
+
+    EncryptedData data;
+    int bytes_received = recv(client_socket, reinterpret_cast<unsigned char*>(&data), sizeof(data), 0);
+
+    if (bytes_received <= 0) {
+        cerr << "Error: Failed to receive data or connection closed by client." << endl;
+    } else {
+
+        cout << "Received IV: ";
+        for (int i = 0; i < 16; ++i) {
+            cout << hex << static_cast<int>(data.iv[i]) << " ";
+        }
+        cout << dec << endl;
+
+        cout << "Received Encrypted Email: ";
+        for (int i = 0; i < 32; ++i) {
+            cout << hex << static_cast<int>(data.email[i]) << " ";
+        }
+        cout << dec << endl;
+
+        cout << "Received Encrypted Username: ";
+        for (int i = 0; i < 16; ++i) {
+            cout << hex << static_cast<int>(data.uname[i]) << " ";
+        }
+        cout << dec << endl;
+
+        cout << "Received Encrypted Password: ";
+        for (int i = 0; i < 16; ++i) {
+            cout << hex << static_cast<int>(data.password[i]) << " ";
+        }
+        cout << dec << endl;
+
+        // decrypting the fields
+        string email, uname, pwd;
+        email = decryptAES(vector<unsigned char>(data.email, data.email + 32), aesKey, data.iv);
+        uname = decryptAES(vector<unsigned char>(data.uname, data.uname + 16), aesKey, data.iv);
+        pwd = decryptAES(vector<unsigned char>(data.password, data.password + 16), aesKey, data.iv);
+	
+	cout << "Decrypted Email: " << email << endl;
+	cout << "Decrypted Username: " << uname << endl;
+	cout << "Decrypted Password: " << pwd << endl;
+
+	if (storeUser(email, uname, pwd, "creds.txt")) {
+		cout << "User stored successfully." << endl;
+	    } else {
+		cout << "Failed to store user." << endl;
+		sendMsg2Client("Username already exists.", client_socket);
+		
+	    }
+	 }
 }
 
 int main() {
@@ -85,7 +397,6 @@ int main() {
                 
                 long long sharedKey = computeSharedSecret(rcvdClientPubKey, privKeyServer);
                 cout <<"Shared Secret Key (Server) :" <<sharedKey<<endl;
-                unsigned char aesKey[16];
 		deriveAESKey(sharedKey, aesKey);
 		cout << "Derived 16-byte AES key (Server): ";
 		for (int i = 0; i < 16; ++i) {
@@ -110,6 +421,16 @@ int main() {
                 if (strcmp(buf, "exit") == 0) {
                     cout << "Client disconnected.\n";
                     break;
+                }
+                
+                if (strcmp(buf, "Registration initiated...") == 0) {
+                    //cout << "Registration initiated..."<<endl;
+                    registrationProcess(client_socket);
+                }
+                
+                if (strcmp(buf, "Login initiated...") == 0) {
+                    //cout << "Registration initiated..."<<endl;
+                    loginProcess(client_socket);
                 }
 
                 cout << "Client: " << buf << endl;
