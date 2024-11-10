@@ -18,6 +18,7 @@ int sock;
 const long long P = 23;
 const long long alpha = 5;
 unsigned char aesKey[16];
+unsigned char aesKey2[16];
 
 struct EncryptedData {
     unsigned char iv[16];
@@ -68,6 +69,17 @@ void handleErrors() {
     exit(1);
 }
 
+void deriveNewKey(long long sharedSecret, unsigned char* key, string uname, int key_length = 16) {
+   
+    string sharedSecretStr = to_string(sharedSecret);
+    sharedSecretStr = uname+sharedSecretStr;
+    cout<<"Shared Secret Key: "<<sharedSecretStr<<endl;
+
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256(reinterpret_cast<const unsigned char*>(sharedSecretStr.c_str()), sharedSecretStr.size(), hash);
+
+    memcpy(key, hash, key_length);
+}
 
 void deriveAESKey(long long sharedSecret, unsigned char* key, int key_length = 16) {
    
@@ -161,11 +173,11 @@ void registrationProcess()
 {
 string email, uname, pwd;
 
-//cout<<"******    ******   ********   *  ******  ********  ******   ******\n";
-//cout<<"*    *    *        *          *  *          *      *        *    *\n";
-//cout<<"* * *     ******   *   ****   *  ******     *      ******   * * *\n";
-//cout<<"*    *    *        *      *   *       *     *      *        *    *\n";
-//cout<<"*     *   ******   ********   *  ******     *      ******   *     *\n";
+cout<<"******    ******   ********   *  ******  ********  ******   ******\n";
+cout<<"*    *    *        *          *  *          *      *        *    *\n";
+cout<<"* * *     ******   *   ****   *  ******     *      ******   * * *\n";
+cout<<"*    *    *        *      *   *       *     *      *        *    *\n";
+cout<<"*     *   ******   ********   *  ******     *      ******   *     *\n";
 while(true){
  cout<<"Provide following registration details to proceed.\n";
  cout<<"Enter valid email address: ";
@@ -226,16 +238,6 @@ auto printEncrypted = [](const vector<unsigned char>& data) {
     if (send(sock, reinterpret_cast<const unsigned char*>(&data), sizeof(data), 0) == -1) {
         std::cerr << "Error: Failed to send encrypted data packet to the server." << std::endl;
     }
-
-    // Send the message to the server
-    //sendMsg2Server(string(email_encrypted.begin(), email_encrypted.end()));
-    //sendMsg2Server(string(uname_encrypted.begin(), uname_encrypted.end()));
-    //sendMsg2Server(string(pwd_encrypted.begin(), pwd_encrypted.end()));
-    
-    /*cout<<string(email_encrypted.begin(), email_encrypted.end())<<endl;
-    cout<<string(uname_encrypted.begin(), uname_encrypted.end())<<endl;
-    cout<<string(pwd_encrypted.begin(), pwd_encrypted.end())<<endl;
-    */
 
 }
 
@@ -301,9 +303,12 @@ void menu() {
 
 int main() {
     char buf[256];
+    unsigned char iv[16] = {0x10, 0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01};
     bool flagrcv = false;
     bool flagsend = false;
 
+    bool flagrcv2 = false;
+    bool flagsend2 = false;
     cout << "\n\t>>>>>>>>>> FAST NUCES University Chat Client <<<<<<<<<<\n\n";
     
         //deffie helman key exhcange
@@ -311,6 +316,8 @@ int main() {
     long long privKeyClient = rand()%10+1;
     long long pubKeyClient = generatePublicKey(privKeyClient);
     
+    long long privKeyClient2 = rand()%10+1;
+    long long pubKeyClient2 = generatePublicKey(privKeyClient2);
     // Create socket and connect to the server
     create_socket();
 
@@ -325,6 +332,7 @@ int main() {
 	}
 	
 	//to make sure that key exchanged one time only
+	
     if(flagrcv==false){
         // clear buffer and receive public key from server
         memset(buf, 0, sizeof(buf));
@@ -344,6 +352,38 @@ int main() {
         menu();
         }
         
+        //////exhange new key for communication
+        
+        //send the key to server
+	/*if(flagsend2==false){
+	string pubKeyMsg2 = to_string(pubKeyClient2);
+	send(sock, pubKeyMsg2.c_str(), pubKeyMsg2.size()+1, 0);
+	cout<<"Send new publicKey to server: " <<pubKeyClient2 <<endl;
+	flagsend2=true;
+	}
+	
+	//to make sure that key exchanged one time only
+	
+    if(flagrcv2==false){
+        // clear buffer and receive public key from server
+        memset(buf, 0, sizeof(buf));
+        recv(sock, buf, sizeof(buf), 0);
+        long long rcvdServerPubKey2 = stoll(buf);
+        cout<<"Received new Public Key from Server "<<rcvdServerPubKey2<<endl;
+        long long sharedKey2 = computeSharedSecret(rcvdServerPubKey2, privKeyClient2);
+        //cout <<"Shared new Secret Key (Client) :" <<sharedKey2<<endl;
+        memset(buf, 0, sizeof(buf));
+        recv(sock, buf, sizeof(buf), 0);
+        string uname = buf;
+        deriveNewKey(sharedKey2, aesKey2, uname);
+        cout << "Derived 16-byte new AES key (Client): ";
+        for (int i = 0; i < 16; ++i) {
+            printf("%02x", aesKey2[i]);
+        }
+        cout << endl;
+        flagrcv2 = true;
+        }
+      */
         // Get user input and send it to the server
         cout << "You (Client): ";
         string message;
@@ -354,8 +394,8 @@ int main() {
         strcpy(buf, message.c_str());
         send(sock, buf, sizeof(buf), 0);
 
-        // If the client sends "exit", terminate the chat
-        if (message == "exit") {
+        // If the client sends "bye", terminate the chat
+        if (message == "bye") {
             cout << "You disconnected from the chat.\n";
             break;
         }

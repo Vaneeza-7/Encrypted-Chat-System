@@ -21,6 +21,8 @@ using namespace std;
 const long long P = 23;
 const long long alpha = 5;
 unsigned char aesKey[16];
+unsigned char aesKey2[16];
+string ultimateUname;
 
 struct EncryptedData {
     unsigned char iv[16];
@@ -57,6 +59,18 @@ long long computeSharedSecret(long long rcvdPublicKey, long long privateKey)
 void handleErrors() {
     cerr << "Error occurred." << endl;
     exit(1);
+}
+
+void deriveNewKey(long long sharedSecret, unsigned char* key, string uname,  int key_length = 16) {
+   
+    string sharedSecretStr = to_string(sharedSecret);
+    sharedSecretStr = uname+sharedSecretStr;
+    cout<<"Shared Secret Key: "<<sharedSecretStr<<endl;
+
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256(reinterpret_cast<const unsigned char*>(sharedSecretStr.c_str()), sharedSecretStr.size(), hash);
+
+    memcpy(key, hash, key_length);
 }
 
 void deriveAESKey(long long sharedSecret, unsigned char* key, int key_length = 16) {
@@ -283,6 +297,7 @@ void loginProcess(int client_socket)
 
 	if (verifyLogin(uname, pwd, "creds.txt")) {
 		cout << "User logged in successfully." << endl;
+		ultimateUname=uname;
 	    } else {
 		cout << "Username or password is incorrect." << endl;
 		sendMsg2Client("Username or password is incorrect.", client_socket);
@@ -338,10 +353,10 @@ void registrationProcess(int client_socket)
 
 	if (storeUser(email, uname, pwd, "creds.txt")) {
 		cout << "User stored successfully." << endl;
+		ultimateUname=uname;
 	    } else {
 		cout << "Failed to store user." << endl;
-		sendMsg2Client("Username already exists.", client_socket);
-		
+		sendMsg2Client("Username already exists.", client_socket);	
 	    }
 	 }
 }
@@ -372,6 +387,12 @@ int main() {
     long long pubKeyServer = generatePublicKey(privKeyServer);
     bool flagrcv = false;
     bool flagsend = false;
+    
+    long long privKeyServer2 = rand()%10+1;
+    long long pubKeyServer2 = generatePublicKey(privKeyServer2);
+    bool flagrcv2 = false;
+    bool flagsend2 = false;
+    bool flagg=false;
 
     while (1) {
         // accept incoming connections
@@ -425,13 +446,53 @@ int main() {
                 
                 if (strcmp(buf, "Registration initiated...") == 0) {
                     //cout << "Registration initiated..."<<endl;
+                    memset(buf, 0, sizeof(buf));
                     registrationProcess(client_socket);
                 }
                 
                 if (strcmp(buf, "Login initiated...") == 0) {
                     //cout << "Registration initiated..."<<endl;
+                    memset(buf, 0, sizeof(buf));
                     loginProcess(client_socket);
                 }
+                
+                if(!ulimateUname.empty() && flagg==false)
+                {
+                 cout <<"Shared new Secret Key (Server) :" <<ultimateUname + sharedKey2<<endl;
+                 flagg=true;
+                }
+		///2nd key exchange
+		/*if(flagrcv2==false){
+                // clear buffer and receive public key from client
+                memset(buf, 0, sizeof(buf));
+                recv(client_socket, buf, sizeof(buf), 0);
+                long long rcvdClientPubKey2 = stoll(buf);
+                cout<<"Received new Public Key from Client "<<rcvdClientPubKey2<<endl;
+                
+                long long sharedKey2 = computeSharedSecret(rcvdClientPubKey2, privKeyServer2);
+                //cout <<"Shared new Secret Key (Server) :" <<ultimateUname+sharedKey2<<endl;
+		deriveNewKey(sharedKey2, aesKey2, ultimateUname);
+		cout << "Derived 16-byte AES key (Server): ";
+		for (int i = 0; i < 16; ++i) {
+		    printf("%02x", aesKey2[i]);
+		}
+		cout << endl;
+                flagrcv2 = true;
+                }
+                //send the key to client
+		if(flagsend2==false){
+		string pubKeyMsg2 = to_string(pubKeyServer2);
+		send(client_socket, pubKeyMsg2.c_str(), pubKeyMsg2.size()+1, 0);
+		cout<<"Send publicKey to client: " <<pubKeyServer2 <<endl;
+		flagsend2=true;
+		string uname = ultimateUname;
+		send(client_socket, uname.c_str(), uname.size()+1, 0);
+		}
+                */
+                
+                // clear buffer and receive message from client
+                //memset(buf, 0, sizeof(buf));
+                //recv(client_socket, buf, sizeof(buf), 0);
 
                 cout << "Client: " << buf << endl;
                 // Send a response back to the client
